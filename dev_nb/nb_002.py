@@ -101,7 +101,7 @@ class ImageBase(ItemBase):
     def pixel(self, func, *args, **kwargs): return self
 
     def coord(self, func, *args, **kwargs):
-        self.flow = func(self.flow, self.shape, *args, **kwargs)
+        self.flow, new_size = func(self.flow, self.shape, *args, **kwargs)
         return self
 
     def affine(self, func, *args, **kwargs):
@@ -113,13 +113,23 @@ class ImageBase(ItemBase):
         self.sample_kwargs = kwargs
         return self
 
-    @property
-    def flow(self):
+    def apply_affine(self, flow, affine_mat, shape):
+        print('ib:', affine_mat)
+        return affine_mult(flow, affine_mat, shape)
+
+    def flow_refresh(self):
+        self.init_flow()
+        if self._affine_mat is not None:
+            self._flow = self.apply_affine(self._flow,self._affine_mat, self.shape)
+            self._affine_mat = None
+
+    def init_flow(self):
         if self._flow is None:
             self._flow = affine_grid_points(self.shape)
-        if self._affine_mat is not None:
-            self._flow = affine_mult(self._flow,self._affine_mat, self.shape)
-            self._affine_mat = None
+
+    @property
+    def flow(self):
+        self.flow_refresh()
         return self._flow
 
     @flow.setter
@@ -135,6 +145,11 @@ class ImageBase(ItemBase):
     def refresh(self):
         pass
 
+    def crop(self):
+        pass
+
+    def pad(self):
+        pass
 
     @property
     @abstractmethod
@@ -144,7 +159,6 @@ class ImageBase(ItemBase):
         clone = self.__class__(self.shape)
         return clone
 
-
 class Image(ImageBase):
     def __init__(self, px):
         C, H, W = px.shape
@@ -152,7 +166,7 @@ class Image(ImageBase):
         self._px = px
         self._logit_px=None
 
-    def refresh(self):
+    def px_refresh(self):
         if self._logit_px is not None:
             self._px = self._logit_px.sigmoid_()
             self._logit_px = None
@@ -163,9 +177,14 @@ class Image(ImageBase):
             self._flow = None
         return self
 
+    def refresh(self):
+        super().refresh()
+        return self.px_refresh()
+
+
     @property
     def px(self):
-        self.refresh()
+        self.px_refresh()
         return self._px
     @px.setter
     def px(self,v):
@@ -381,6 +400,9 @@ def grid_sample_nearest(input, coords, padding_mode='zeros'):
 def affine_points_to_grid(grid, h, w):
     return grid.view(grid.shape[0],h,w,2)
 
+def affine_grid_to_points(grid):
+    return grid.view(grid.shape[0],-1,2)
+
 def affine_grid(size):
     size = ((1,)+size)
     N, H, W = size
@@ -395,7 +417,7 @@ def affine_grid_points(size):
     grid = affine_grid(size)
     return grid.view(grid.shape[0],-1,2)
 
-def affine_mult(c,m):
+def affine_mult(c,m,shape=None):
     if m is None: return c
     size = c.size()
     c = c.view(-1,2)
@@ -458,8 +480,10 @@ class TfmCoord(Transform): order,_wrap = 4,'coord'
 def jitter(c, size, magnitude:uniform):
     return c.add_((torch.rand_like(c)-0.5)*magnitude*2)
 
-@TfmPixel
-def flip_lr(x): return x.flip(2)
+@TfmCoord
+def flip_lr(c,size):
+    c[:,:,0] = -c[:,:,0]
+    return c
 
 @partial(TfmPixel, order=-10)
 def pad(x, padding, mode='reflect'):
@@ -472,6 +496,7 @@ def crop(x, size, row_pct:uniform=0.5, col_pct:uniform=0.5):
     row = int((x.size(1)-rows+1) * row_pct)
     col = int((x.size(2)-cols+1) * col_pct)
     return x[:, row:row+rows, col:col+cols].contiguous()
+
 
 def compute_zs_mat(sz, scale, squish, invert, row_pct, col_pct):
     orig_ratio = math.sqrt(sz[1]/sz[0])
@@ -494,6 +519,5 @@ def zoom_squish(c, size, scale:uniform=1.0, squish:uniform=1.0, invert:rand_bool
                 row_pct:uniform=0.5, col_pct:uniform=0.5):
     #This is intended for scale, squish and invert to be of size 10 (or whatever) so that the transform
     #can try a few zoom/squishes before falling back to center crop (like torchvision.RandomResizedCrop)
-    #set_trace()
     m = compute_zs_mat(size, scale, squish, invert, row_pct, col_pct)
     return affine_mult(c, FloatTensor(m), size)
