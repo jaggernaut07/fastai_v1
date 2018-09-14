@@ -114,7 +114,7 @@ class ImageBase(ItemBase):
         return self
 
     def apply_affine(self, flow, affine_mat, shape):
-        print('ib:', affine_mat)
+        #print('ib:', flow, affine_mat)
         return affine_mult(flow, affine_mat, shape)
 
     def flow_refresh(self):
